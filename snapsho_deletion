@@ -1,0 +1,74 @@
+import json, boto3, datetime
+import os
+
+def send_sns_notification(subject, message):
+    sns = boto3.client('sns', region_name=os.environ['Region_Name'])  # Region name to be updated in env variable
+    topic_arn = os.environ['SNS_TOPIC_ARN']  # To be updated in env variable
+
+    sns.publish(TopicArn=topic_arn, Message=message, Subject=subject)
+
+def lambda_handler(event, context):
+    try:
+        # Delete snapshots older than diff_time days
+        diff_time = int(os.environ.get('DIFF_TIME'))  # Default to 30 if not set or invalid
+        i = 0
+        ec2 = boto3.resource('ec2', region_name=os.environ['Region_Name'])
+        ec = boto3.client('ec2', region_name=os.environ['Region_Name'])
+        s3 = boto3.client('s3', region_name=os.environ['Region_Name'])
+
+        # Get all the snapshots from the account
+        snaps = ec2.snapshots.filter(OwnerIds=['self'])
+
+        # Get the current time
+        now_time = datetime.datetime.now().date()
+        current_time = datetime.datetime.now()
+        result = []
+
+        # Iterate through the snapshots
+        for snap in snaps:
+            try:
+                snap_tags = snap.tags or []  # Handle cases where tags are None
+                # Check if the snapshot is taken by AWS Backup or has no tags
+                if 'aws:backup:source-resource' not in [tag['Key'] for tag in snap_tags]:
+
+                    # Check if the snapshot has the 'type' tag with value 'historical'
+                    if any(tag['Key'] == 'type' and tag['Value'] == 'historical' for tag in snap_tags):
+                        continue  # Skip snapshots with tag 'type'='historical'
+
+                    # Get the creation time of the snapshot
+                    snap_time = snap.start_time.date()
+                    # Calculate the difference
+                    snapage_time = (now_time - snap_time).days
+                    # If the creation time is older than the required difference
+                    if snapage_time >= diff_time:
+                        ec.delete_snapshot(SnapshotId=snap.id)
+                        result.append(f"{snap.id} Created on {snap_time} with volume size {snap.volume_size} GB has been deleted as it is created before {snapage_time} days")
+                        i += 1
+            except Exception as e:
+                result.append(f"An error occurred: {str(e)}")
+                error_message = f"An error occurred in exception: {str(e)}"
+                print(error_message)
+                # Send SNS notification for general exceptions
+                send_sns_notification("Error in Snapshotdeletion Lambda Function", error_message)
+                # Skip to the next iteration of the loop
+                continue
+
+        result.append(f"{i} Snapshots have been deleted")
+        # Convert result list to a string
+        result_str = '\n'.join(result)
+        # Upload result string to S3 bucket
+        bucket_name = os.environ['BUCKET_NAME']  # Value to be updated in env variable
+        object_key = f"Snapshot_Details/deleted_snapshot_details{current_time}.txt"
+        s3.put_object(Body=result_str, Bucket=bucket_name, Key=object_key)
+        print(i, 'Snapshots have been deleted')
+        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{object_key}"
+        print('Details have been saved in', s3_url)
+        success_message = f"{i} snapshots have been deleted. Details have been saved in {s3_url}"
+        send_sns_notification("Snapshot CleanUp that are older than 30 days", success_message)
+        return s3_url
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        print(error_message)
+        # Send SNS notification for general exceptions
+        send_sns_notification("Error in Snapshotdeletion Lambda Function", error_message)
+        # raise e
