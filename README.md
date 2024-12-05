@@ -3,7 +3,7 @@ Click on create Lambda function. Provide name, Select python version, select rol
 Deploy code in code section.
 Come in configuration section.
 Edit configuration details as per requirement.
-Edit **environmental variable**.
+Edit **environmental variable**(same for AMI deregister & snapshot_deletion).
 Add trigger.
 
 # Environment variable:
