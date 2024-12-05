@@ -1,0 +1,76 @@
+import boto3
+from datetime import datetime, timedelta, timezone
+import os
+import json
+ 
+def send_sns_notification(subject, message):
+    sns = boto3.client('sns', region_name=os.environ['Region_Name'])  # Replace 'your_sns_region' with your desired SNS region
+    topic_arn =os.environ['SNS_TOPIC_ARN']   # Replace 'your_sns_topic_arn' with your SNS topic ARN
+ 
+    sns.publish(TopicArn=topic_arn, Message=message, Subject=subject)
+ 
+def lambda_handler(event, context):
+ 
+    # Process the input received from the first Lambda function
+    input_from_first_lambda = event['volume_id']
+    total_count = event['count']
+    # Set the threshold for unattached volumes (in days)
+    threshold_days = int(os.environ.get('THRESHOLD_DAYS', '30')) # Default to 30 if not set or invalid
+    current_time = datetime.now(timezone.utc)
+    region = os.environ['Region_Name']
+    #Create an EC2 client
+    ec2_client = boto3.client('ec2', region_name=region)
+    #Get all volumes
+    volumes = ec2_client.describe_volumes()
+    #Create an S3 client
+    s3_client = boto3.client('s3', region_name=region)
+    s3_bucket = os.environ['BUCKET_NAME']
+    s3_key = 'VolumeDetails/ebs_volume_list_' + current_time.strftime("%Y-%m-%d_%H-%M-%S") + '.txt'
+
+ 
+    # List to store unattached volume details
+    unattached_volumes = []
+    #for counting volumes that are to be deleted
+    i=0
+    #volume_details = []  # Initialize volume_details as an empty list
+    for volume in volumes['Volumes']:
+        # Check if the volume is unattached
+        if not volume['Attachments'] and volume['State'] == 'available':
+            volume_id = volume['VolumeId']
+            volume_creation_time = volume['CreateTime']
+            # Calculate the age of the volume
+            age = current_time - volume_creation_time
+            # Check if the volume is older than the threshold
+            if age.days >= threshold_days:
+                # Add unattached volume details to the list
+                volume_details = {
+                    'Volume_Id': volume['VolumeId'],
+                    'Create_Time': volume_creation_time.isoformat(),
+                    'Age_In_Days': age.days,
+                    'vol_size': volume['Size'],
+                    'vol_type': volume['VolumeType']
+                }
+                unattached_volumes.append(volume_details)
+                i=i+1
+                # Delete the unattached volume
+                ec2_client.delete_volume(VolumeId=volume_id)
+    # Perform operations based on the input (e.g., delete volume, etc.)
+    # Placeholder for actual logic
+    input_from_first_lambda.append(unattached_volumes)
+    total_count =total_count+i
+ 
+    with open('/tmp/ebs_volume_list.txt', 'w') as file:
+        file.write(json.dumps(input_from_first_lambda))
+        #for volumes in input_from_first_lambda:
+        #    file.write(f"VolumeId: {volumes['VolumeId']}, DetachedTime: {volumes['CreateTime']}, AgeInDays: {volumes['AgeInDays']}\n")
+        file.write(json.dumps(f"{total_count} Volumes have been deleted."))
+    # Upload the file to S3
+    s3_client.upload_file('/tmp/ebs_volume_list.txt', s3_bucket, s3_key)
+    # Get the S3 path
+    s3_path = f"s3://{s3_bucket}/{s3_key}"
+    # Send SNS notification with the S3 path
+    sns_message = f"Unattached EBS volumes older than {threshold_days} days are {total_count}. Volume list details have been saved in {s3_path}"
+    send_sns_notification("EBS Volume Cleanup that are more than 30 days", sns_message)
+    # Return the input value as the output
+    return f"{total_count} volumes have been deleted successfully! Volume details are available at {s3_path}"
+    #return f"{total_count} volumes have been deleted successfully! Volume details are {input_from_first_lambda}"
