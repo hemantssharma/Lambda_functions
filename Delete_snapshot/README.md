@@ -26,7 +26,7 @@ Sends SNS notifications for errors and successful deletions.
 
 **Deployment**
 
-## 1. Create Lambda Function:
+### 1. Create Lambda Function:
 
 Go to the AWS Lambda console.
 Create a new Lambda function.
