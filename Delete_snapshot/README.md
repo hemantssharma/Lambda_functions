@@ -19,7 +19,7 @@ BUCKET_NAME: Name of the S3 bucket to store the details of deleted snapshots.
 1. Send SNS Notification: Sends an SNS notification with a subject and message.
 2. Lambda Handler: Main function that:
 Deletes snapshots older than the specified number of days.
-Skips snapshots taken by AWS Backup or tagged as 'historical'.
+Skips snapshots taken by AWS Backup or tagged as 'type == historical'.
 Logs the details of deleted snapshots to an S3 bucket.
 Sends SNS notifications for errors and successful deletions.
 ```
