@@ -32,12 +32,15 @@ Go to the AWS Lambda console.
 Create a new Lambda function.
 Set the runtime to Python 3.x.
 Copy and paste the code into the Lambda function editor.
-Set Environment Variables:
+
+##### 2. Set Environment Variables:
 
 In the Lambda function configuration, set the environment variables as described above.
-Add Permissions:
+
+##### 3. Add Permissions:
 
 Ensure the Lambda function has the necessary permissions to access EC2, SNS, and S3.
-Test the Function:
+
+##### 4. Test the Function:
 
 Create a test event in the Lambda console and invoke the function to ensure it works as expected.
