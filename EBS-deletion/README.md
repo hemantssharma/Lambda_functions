@@ -18,29 +18,38 @@ Set the following environment variables in your Lambda function configuration:
 - `THRESHOLD_DAYS`: Number of days to check for unattached volumes
 - `BUCKET_NAME`: Name of the S3 bucket to store volume details
 
-## Deployment
 
+**Functionality**
+```
+1. Send SNS Notification: Sends an SNS notification with a subject and message.
+2. Lambda Handler: Main function that:
+Deletes ebs volumes older than the specified number of days.
+Skips snapshots taken by AWS Backup or tagged as 'Delete == No'.
+Logs the details of deleted ebs volumes to an S3 bucket.
+Sends SNS notifications for errors and successful deletions.
+```
 
-1. **Update the Lambda function code:**
+**Deployment**
 
-    - Modify the `lambda_handler` function in `lambda_function.py` as needed.
-    - Ensure the environment variables are set correctly.
+##### 1. Create Lambda Function:
 
-2. **Deploy the Lambda function:**
-Click on `Deploy` to upload the code.
+Go to the AWS Lambda console.
+Create a new Lambda function.
+Set the runtime to Python 3.x.
+Copy and paste the code into the Lambda function editor.
 
-3. **Set up CloudWatch Events:**
+##### 2. Set Environment Variables:
 
-    - Create Event bridge rule to trigger the Lambda function periodically (e.g., monthly).
+In the Lambda function configuration, set the environment variables as described above.
 
-## Usage
+##### 3. Add Permissions:
 
-The Lambda function will:
+Ensure the Lambda function has the necessary permissions to access EC2, SNS, and S3.
 
-1. Identify unattached EBS volumes older than the specified number of days.
-2. Delete the identified volumes.
-3. Send a notification via SNS with the details of the deleted volumes.
-4. Log the details to an S3 bucket.
+##### 4. Test the Function:
+
+Create a test event in the Lambda console and invoke the function to ensure it works as expected.
+
 
 ## Error Handling
 
