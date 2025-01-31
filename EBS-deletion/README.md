@@ -27,9 +27,9 @@ Set the following environment variables in your Lambda function configuration:
     - Ensure the environment variables are set correctly.
 
 2. **Deploy the Lambda function:**
-
 ```
 Click on "Deploy" to upload the code.
+```
 
 3. **Set up CloudWatch Events:**
 
