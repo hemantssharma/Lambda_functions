@@ -25,7 +25,7 @@ Click on `Deploy` button to upload the code.
 **Functionality**
 ```
 1. Start/stop the specified EC2 instances.
-2. Send a notification via SNS with the details of the started instances.
+2. Send a notification via SNS with the details of the started/stopped instances.
 ```
 
 ## Error Handling
