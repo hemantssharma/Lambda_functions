@@ -31,3 +31,8 @@ Click on `Deploy` button to upload the code.
 ## Error Handling
 
 If an error occurs during execution, the function will return a status code of 500 and the error message.
+
+## Author
+```
+Hemant Sharma
+```
