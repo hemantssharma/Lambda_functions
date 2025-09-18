@@ -1,0 +1,85 @@
+
+import json, boto3, datetime
+import os
+
+def send_sns_notification(subject, message):
+    sns = boto3.client('sns', region_name=os.environ['Region_Name'])  # Region name to be updated in env variable
+    topic_arn = os.environ['SNS_TOPIC_ARN']  # To be updated in env variable
+
+    sns.publish(TopicArn=topic_arn, Message=message, Subject=subject)
+
+def get_all_images(ec2_client):
+    images = []
+    response = ec2_client.describe_images(Owners=['self'])
+    images.extend(response['Images'])
+
+    while 'NextToken' in response:
+        response = ec2_client.describe_images(Owners=['self'], NextToken=response['NextToken'])
+        images.extend(response['Images'])
+
+    return images
+
+def process_images_in_batches(images, batch_size=100):
+    for i in range(0, len(images), batch_size):
+        yield images[i:i + batch_size]
+
+def lambda_handler(event, context):
+    try:
+        # Delete snapshots older than diff_time days   
+        diff_time = int(os.environ.get('DIFF_TIME'))
+        i = 0
+
+        ec2 = boto3.resource('ec2', region_name=os.environ['Region_Name'])
+        ec = boto3.client('ec2', region_name=os.environ['Region_Name'])
+        s3 = boto3.client('s3', region_name=os.environ['Region_Name'])
+        # Get all the snaps from the account
+        images = get_all_images(ec)
+        # Get the current time
+        now_time = datetime.datetime.now().date()
+        current_time = datetime.datetime.now()
+        result = []
+        # Iterate through the snaps in batches
+        for batch in process_images_in_batches(images):
+            for img in batch:
+                try:
+                    tags = {tag['Key']: tag['Value'] for tag in img.get('Tags', [])}
+                    if tags.get('aws:backup:source-resource') is None or not tags:  # Include AMIs without any tags
+                        # Check if the AMI has the 'type' tag with value 'historical'
+                        if any(tag['Key'] == 'type' and tag['Value'] == 'historical' for tag in img.get('Tags', [])):
+                            continue  # Skip AMIs with tag 'type'='historical'
+
+                        # Get the creation time of the snap
+                        ami_time = img['CreationDate']
+                        ami_time = datetime.datetime.strptime(ami_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+                        ami_created = ami_time.date()
+                        # Calculate the difference
+                        amidiff_time = (now_time - ami_created).days
+                        # If the creation time is older than the required difference
+                        if amidiff_time >= diff_time:
+                            # to deregister images
+                            ec.deregister_image(ImageId=img['ImageId'])
+                            result.append(f"{img['ImageId']} Created on {ami_created} has been deregistered as it is created before {amidiff_time} days")
+                            i += 1
+                except Exception as e:
+                    result.append(f"Error processing AMI {img['ImageId']}: {str(e)}")
+                    error_message = f"Error processing AMI {img['ImageId']}: {str(e)}"
+                    send_sns_notification("Error in AMIderegister Lambda Function", error_message)
+                    continue
+        result.append(f"{i} AMI has been deregistered")
+        # Convert result list to a string
+        result_str = '\n'.join(result)
+        # Upload result string to S3 bucket
+        bucket_name = os.environ['BUCKET_NAME']  # Value to be updated in env variable
+        object_key = f"AMI_Details/Deregistered_ami_details_{current_time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        s3.put_object(Body=result_str, Bucket=bucket_name, Key=object_key)
+        print(i, 'AMI has been deregistered')
+        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{object_key}"
+        print('Details have been saved in', s3_url)
+        success_message = f"{i} AMI have been deregistered. Details have been saved in {s3_url}"
+        send_sns_notification("AMI CleanUp that are older than 30 days", success_message)
+        return s3_url
+    except Exception as e:
+        # Send SNS notification for any unhandled exceptions
+        error_message = f"Unhandled exception: {str(e)}"
+        send_sns_notification("Error in AMIderegister Lambda Function", error_message)
+        # raise e  # Re-raise the exception after sending the notification

@@ -1,0 +1,103 @@
+import boto3
+from datetime import datetime, timezone, timedelta
+import os
+import json
+
+def send_sns_notification(subject, message):
+    sns = boto3.client('sns', region_name=os.environ['Region_Name'])
+    topic_arn = os.environ['SNS_TOPIC_ARN']
+    sns.publish(TopicArn=topic_arn, Message=message, Subject=subject)
+
+def lambda_handler(event, context):
+    try:
+        region = os.environ['Region_Name']
+        ec2_client = boto3.client('ec2', region_name=region)
+        cloudtrail_client = boto3.client('cloudtrail', region_name=region)
+        s3_client = boto3.client('s3', region_name=region)
+        
+        volumes = ec2_client.describe_volumes()
+        threshold_days = int(os.environ.get('THRESHOLD_DAYS'))
+        current_time = datetime.now(timezone.utc)
+        unattached_volumes = []
+        i = 0
+
+        for volume in volumes['Volumes']:
+            if volume['State'] == 'available':
+                volume_id = volume['VolumeId']
+                
+                # Check for the "Delete = No" tag
+                tags = volume.get('Tags', [])
+                delete_tag = next((tag for tag in tags if tag['Key'] == 'Delete' and tag['Value'].lower() == 'no'), None)
+                if delete_tag:
+                    continue  # Skip this volume if it has the "Delete = No" tag
+
+                # Calculate the age of the volume
+                volume_creation_time = volume['CreateTime']
+                age_in_days = (current_time - volume_creation_time).days
+
+                # Check if the volume is older than the threshold
+                if age_in_days > threshold_days:
+                    volume_details = {
+                        'VolumeId': volume['VolumeId'],
+                        'CreateTime': volume_creation_time.isoformat(),
+                        'AgeInDays': age_in_days,
+                        'vol_size': volume['Size'],
+                        'vol_type': volume['VolumeType']
+                    }
+                    unattached_volumes.append(volume_details)
+                    ec2_client.delete_volume(VolumeId=volume_id)
+                    i += 1
+                else:
+                    # Check CloudTrail for detachment events
+                    cloudtrail_response = cloudtrail_client.lookup_events(
+                        LookupAttributes=[
+                            {
+                                'AttributeKey': 'ResourceName',
+                                'AttributeValue': f'{volume_id}'
+                            }
+                        ]
+                    )
+                    event_exists = len(cloudtrail_response['Events'])
+                    if event_exists > 0:
+                        for event in cloudtrail_response['Events']:
+                            if event['EventName'] == 'DetachVolume':
+                                event_time = event['EventTime']
+                                detachment_age = current_time - event_time
+                                if detachment_age > timedelta(days=threshold_days):
+                                    volume_details = {
+                                        'VolumeId': volume['VolumeId'],
+                                        'CreateTime': volume_creation_time.isoformat(),
+                                        'AgeInDays': detachment_age.days,
+                                        'vol_size': volume['Size'],
+                                        'vol_type': volume['VolumeType']
+                                    }
+                                    unattached_volumes.append(volume_details)
+                                    ec2_client.delete_volume(VolumeId=volume_id)
+                                    i += 1
+
+        if not unattached_volumes:
+            unattached_volumes.append("No volumes available for deletion")
+
+        payload = {
+            'volume_id': unattached_volumes,
+            'count': i
+        }
+
+        s3_bucket = os.environ['BUCKET_NAME']
+        s3_key = 'VolumeDetails/ebs_volume_list_' + current_time.strftime("%Y-%m-%d_%H-%M-%S") + '.txt'
+        with open('/tmp/ebs_volume_list.txt', 'w') as file:
+            file.write(json.dumps(payload))
+            file.write(json.dumps(f"{i} Volumes have been deleted."))
+        
+        s3_client.upload_file('/tmp/ebs_volume_list.txt', s3_bucket, s3_key)
+        s3_path = f"s3://{s3_bucket}/{s3_key}"
+        sns_message = f"Unattached and available EBS volumes older than {threshold_days} days are {i}. Volume list details have been saved in {s3_path}"
+        send_sns_notification("EBS Volume Cleanup", sns_message)
+
+        return f"{i} volumes have been deleted successfully! Volume details are available at {s3_path}"
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        sns_message = f"An error occurred: {e}"
+        send_sns_notification("Error while EBS Volume Cleanup", sns_message)
+        raise e

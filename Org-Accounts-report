@@ -1,0 +1,90 @@
+import boto3
+import csv
+import io
+from datetime import datetime, timezone
+
+# Clients
+org_client = boto3.client('organizations')
+s3_client = boto3.client('s3')
+sns_client = boto3.client('sns')
+
+# Constants
+BUCKET_NAME = 'hemantksharma-test'  # Replace with your bucket name
+PREFIX = 'suspended-accounts-weekly-reports/'  # Folder inside S3 bucket
+SNS_TOPIC_ARN = 'arn:aws:sns:us-east-1:767397915550:snapshot_deletion'  # Replace with your SNS Topic ARN
+
+def lambda_handler(event, context):
+    now = datetime.now(timezone.utc)
+    
+    try:
+        # Fetch suspended accounts
+        suspended_accounts = []
+        paginator = org_client.get_paginator('list_accounts')
+        
+        for page in paginator.paginate():
+            for acct in page['Accounts']:
+                if acct['Status'] == 'SUSPENDED':
+                    # Assuming you have a way to get the suspension date
+                    suspension_date = acct.get('SuspensionTimestamp', now)  # Replace with actual suspension date if available
+                    suspended_since_days = (now - suspension_date).days
+                    suspended_accounts.append({
+                        'Id': acct['Id'],
+                        'Email': acct['Email'],
+                        'Name': acct['Name'],
+                        'Status': acct['Status'],
+                        'JoinedMethod': acct['JoinedMethod'],
+                        'JoinedTimestamp': acct['JoinedTimestamp'].isoformat(),
+                        'SuspendedSinceDays': suspended_since_days
+                    })
+        
+        if not suspended_accounts:
+            print("No suspended accounts found.")
+            return {
+                'statusCode': 200,
+                'body': 'No suspended accounts to report.'
+            }
+        
+        # Create CSV in memory
+        csv_buffer = io.StringIO()
+        writer = csv.DictWriter(csv_buffer, fieldnames=['Id', 'Email', 'Name', 'Status', 'JoinedMethod', 'JoinedTimestamp', 'SuspendedSinceDays'])
+        writer.writeheader()
+        for account in suspended_accounts:
+            writer.writerow(account)
+        
+        # Create filename
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d')
+        filename = f"{PREFIX}suspended-accounts-{timestamp}.csv"
+        
+        # Upload CSV to S3
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=filename,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        
+        # Generate HTTPS URL for the S3 file
+        s3_file_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{filename}"
+        
+        # Publish SNS notification with the HTTPS URL
+        message = (
+            f"Suspended Accounts Report generated.\n\n"
+            f"Report stored at: {s3_file_url}"
+        )
+        sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f"[Alert] Suspended Accounts Report Generated",
+            Message=message
+        )
+        
+        return {
+            'statusCode': 200,
+            'body': f"CSV report saved to {s3_file_url} and SNS notification sent."
+        }
+    
+    except Exception as e:
+        print(f"Error: {e}")
+        return {
+            'statusCode': 500,
+            'body': f"An error occurred: {e}"
+        }
