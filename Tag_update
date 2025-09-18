@@ -1,0 +1,60 @@
+import boto3
+
+# Hardcoded new tag values
+NEW_CONSUMER = 'abc'
+NEW_APPLICATION = 'qwe'
+
+# SNS topic ARN (replace with your actual SNS topic ARN)
+SNS_TOPIC_ARN = 'arn:aws:sns:us-east-1:767397915550:Tag_update'
+
+def lambda_handler(event, context):
+    ec2_client = boto3.client('ec2')
+    sns_client = boto3.client('sns')
+
+    regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+    updated_resources = []
+
+    for region in regions:
+        print(f"Checking region: {region}")
+        tagging_client = boto3.client('resourcegroupstaggingapi', region_name=region)
+
+        paginator = tagging_client.get_paginator('get_resources')
+        page_iterator = paginator.paginate(
+            ResourceTypeFilters=['logs:log-group']
+        )
+
+        for page in page_iterator:
+            for resource_tag_mapping in page['ResourceTagMappingList']:
+                resource_arn = resource_tag_mapping['ResourceARN']
+                tags = {tag['Key']: tag['Value'] for tag in resource_tag_mapping['Tags']}
+
+                if tags.get('Consumer') == 'test@abc.com' and tags.get('Application') == 'test':
+                    print(f"Updating tags for: {resource_arn} in region {region}")
+                    tagging_client.tag_resources(
+                        ResourceARNList=[resource_arn],
+                        Tags={
+                            'Consumer': NEW_CONSUMER,
+                            'Application': NEW_APPLICATION
+                        }
+                    )
+                    updated_resources.append(resource_arn)
+
+    # Prepare SNS message
+    if updated_resources:
+        message_body = "Tag update completed for the following CloudWatch Logs groups:\n\n"
+        message_body += "\n".join(updated_resources)
+    else:
+        message_body = "No CloudWatch Logs groups matched the tag criteria."
+
+    # Send SNS notification
+    sns_client.publish(
+        TopicArn=SNS_TOPIC_ARN,
+        Subject='CloudWatch Logs Tag Update Summary',
+        Message=message_body
+    )
+
+    return {
+        'statusCode': 200,
+        'body': f'Tag update completed for {len(updated_resources)} log groups across regions.',
+        'updatedResources': updated_resources
+    }
